@@ -1,0 +1,707 @@
+---
+title: "Figure 2 Notebook"
+author: "Humza Hemani, Jeffrey Cifello"
+output: figure2
+---
+
+```{r Preprocess}
+library(tidyverse)
+
+preprocess_longi <- function(donor_csv, outpath_9, outpath_10, outpath_barcode) {
+  donor_df <- read.csv(donor_csv)
+  pipeline_dir <- donor_df[1,4]
+  sample_name <- donor_df[1, 1]
+
+  step9_path <- file.path(pipeline_dir, "step9", "filtered_ScoredMutations.csv")
+  tot.df <- read.csv(step9_path, header=T)
+  tot.df$donor <- sample_name
+
+  step10_path <- file.path(pipeline_dir, "step10", "summary.csv")
+  tot.df.10 <- read.csv(step10_path, header=F)
+
+  for (i in 2:nrow(donor_df)) {
+    pipeline_dir <- donor_df[i,4]
+    sample_name <- donor_df[i, 1]
+    print(sample_name)
+    step9_path <- file.path(pipeline_dir, "step9", "filtered_ScoredMutations.csv")
+    print(step9_path)
+    step9_csv <- read.csv(step9_path, header=T)
+    step9_csv$donor <- sample_name
+    tot.df <- rbind(tot.df, step9_csv)
+
+    step10_path <- file.path(pipeline_dir, "step10", "summary.csv")
+    print(step10_path)
+    step10_csv <- read.csv(step10_path, header=F)
+    tot.df.10 <- rbind(tot.df.10, step10_csv)
+
+  }
+
+  tot.df <- tot.df %>%
+    mutate(Code=substr(donor, 1, 2), bc=substr(bc, 1,16))
+  ######## load in MD so that batches get separated into visits  
+  meta <- read_csv('/data/TCR/10X_Genomics/scRNAseq_P1_HUMAN_GEX_V2/code/test_code/rerun_scripts/notebooks/data-repo_figure4/clustering_metadata_logNorm.csv', guess_max = 100000)
+  pheno <- read_csv('/data/TCR/10X_Genomics/scRNAseq_P1_HUMAN_GEX_V2/code/test_code/rerun_scripts/notebooks/data-repo_figure4/pheno_assgnmnt_logNorm.csv')
+  meta <- meta %>% inner_join(pheno, by='cluster')
+
+  meta <- filter(meta, study=="longi") %>% 
+    dplyr::select(barcode, Person, Code, visit, Age, subset) %>%
+    mutate(bc=substr(barcode, 1, 16), Code.visit=paste0(Code, ".", visit))
+
+  new.tot.df <- left_join(tot.df, 
+                          dplyr::select(meta, Code, bc, Code.visit, Person, subset), 
+                          by=c("Code", "bc")) %>%
+    filter(subset!="NK")
+  write.csv(new.tot.df, "./data/compiled_9_longi.csv")
+  new.tot.df <- dplyr::select(new.tot.df, Chr, POS, bc, ALT, Code.visit, Code, Person, subset, GENE, AA_CHANGE)
+  write.csv(new.tot.df, outpath_9)
+  write.csv(select(new.tot.df, bc, Code.visit, Code, Person, subset), outpath_barcode)
+
+
+  colnames(tot.df.10) <- c("donor", "exome_reads", "sam_reads", "exome_cov", 
+    "cov", "umi")
+  tot.df.10 <- distinct(tot.df.10, donor, .keep_all = TRUE)
+  write.csv(tot.df.10, outpath_10, row.names=F)
+}
+dir.create("data", showWarnings=F)
+preprocess_longi("longi_donors.csv", 
+  "./data/fig2_longi.csv", 
+  "./data/coverage_longi.csv",
+  "./data/longi_barcodes.csv")
+
+```
+
+```{bash}
+echo "Person, cell_path, reads_exome, reads, umi, coverage_exome, coverage" > ./data/step11_mutations.csv
+
+for step11_csv in /data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/*/step11/mutations.csv ; do
+	new_sam="$( basename $(dirname "$(dirname "$step11_csv")") )"
+	awk -v sam="$new_sam" '{print sam", "$0}' $step11_csv >> ./data/step11_mutations.csv
+done
+```
+
+
+```{r Fig2a}
+suppressMessages({
+library(tidyverse)
+})
+
+meta <- read_csv('./../common_data/clustering_metadata_logNorm.csv', guess_max = 100000)
+
+meta <- meta %>%
+	mutate(bc=substr(barcode, 1, 16)) %>% 
+	dplyr::select(-barcode) %>%
+	filter(study=="longi") %>%
+	mutate(Code.visit=paste0(Code, ".", visit))
+
+longi.muts <- read.csv("./data/fig2_longi.csv") %>%
+	filter(Code.visit!="F3.2")
+
+cells.per <- dplyr::select(meta, Code.visit, bc) %>%
+			group_by(Code.visit) %>%
+			summarize(cells=n())
+
+mutated.cells.per <- distinct(longi.muts, Code.visit, bc) %>%
+			group_by(Code.visit) %>%
+			summarize(mutated.cells=n())
+
+muts.per.cell <- distinct(longi.muts, Code.visit, bc, Chr, POS, ALT, Person) %>%
+			group_by(Code.visit, bc) %>%
+			summarize(mutations=n())
+print("muts.per.cell")
+print(muts.per.cell)
+
+muts.per.all <- dplyr::select(meta, Code.visit, bc) %>%
+		left_join(dplyr::select(muts.per.cell, Code.visit, bc, mutations)) %>%
+		mutate(mutations=ifelse(is.na(mutations), 0, mutations))
+
+## annotate mutations df's with age etc.
+muts.per.cell <- muts.per.cell %>%
+			mutate(Code=substr(Code.visit, 1, 2), visit=as.numeric(substr(Code.visit, 4, 4))) %>%
+			left_join(distinct(meta, Code, visit, Age))
+print("muts.per.cell")
+print(muts.per.cell)
+
+muts.per.all <- muts.per.all %>%
+			mutate(Code=substr(Code.visit, 1, 2), visit=as.numeric(substr(Code.visit, 4, 4))) %>%
+			left_join(distinct(meta, Code, visit, Age))
+
+## do the metadata stuff for the scaling
+new_coverage <- read_csv('./data/coverage_longi.csv') %>%
+	rename(donor_umi = umi) %>%
+	rename(Code = donor)
+read_longi <- read.csv('./data/step11_mutations.csv', header=T)
+
+tmp <- unlist(strsplit(read_longi$cell_path, "/"))
+filenames <- tmp[seq(from=12, by=12, to=length(tmp))]
+tmp <- unlist(strsplit(filenames, "_"))
+barcodes <- tmp[seq(from=3, by=3, to=length(tmp))] %>%
+  str_replace(".bam", "")
+read_longi <- add_column(read_longi, bc = barcodes)
+print(colnames(read_longi))
+print(head(new_coverage))
+read_longi <- mutate(read_longi, bc=str_extract(bc, regex("[ACGT]+"))) %>% ### WACKY STUFF
+		dplyr::select(Person, bc, umi, coverage) %>% 
+		mutate(Code=substr(Person,1,2)) %>%
+		left_join(new_coverage, by="Code") %>%
+		distinct()
+
+muts.per.cell <- ungroup(muts.per.cell) %>%
+		left_join(dplyr::select(meta, Code, bc, Person), by=c("Code", "bc")) %>%
+		inner_join(read_longi, by=c("Person", "bc", "Code")) %>%
+		mutate(num_mut=mutations) %>%
+		dplyr::select(-mutations)
+
+muts.per.all <- ungroup(muts.per.all) %>%
+		left_join(dplyr::select(meta, Code, bc, Person), by=c("Code", "bc")) %>%
+		inner_join(read_longi, by=c("Person", "bc", "Code")) %>%
+		mutate(num_mut=mutations) %>%
+		dplyr::select(-mutations)
+
+
+### get scaled muts
+library(MASS)
+library(lme4)
+library(lmerTest)
+
+###################################### for mutated cells
+write.csv(muts.per.cell, "./data/muts.per.cell.csv")
+muts.per.cell$log2_mut <- log2(muts.per.cell$num_mut+1)
+suppressWarnings(nbGLM <- glm.nb(log2_mut ~ umi + coverage + exome_cov, data=muts.per.cell))
+
+muts.per.cell$norm_mut = (nbGLM$residuals + nbGLM[["coefficients"]][["(Intercept)"]])
+
+adj_quantile <- quantile(muts.per.cell$norm_mut, probs = c(0.001,0.999))
+muts.per.cell[muts.per.cell$norm_mut < min(adj_quantile),]$norm_mut <- min(adj_quantile)
+muts.per.cell[muts.per.cell$norm_mut > max(adj_quantile),]$norm_mut <- max(adj_quantile)
+value <- muts.per.cell$norm_mut
+muts.per.cell$scale_mut <- (value - min(value)) / (max(value) - min(value)) * max(muts.per.cell$num_mut) 
+
+# mixed effects
+mixed.model <- lmer(scale_mut ~ Age + (1|Code), data=muts.per.cell)
+mixed.model.an <- anova(mixed.model)
+mixed.model.an$slope <- summary(mixed.model)$coef[[2]]
+write.csv(mixed.model.an, "./data/fig2a_anova.csv")
+muts.per.cell$pred_mut <- muts.per.cell$Age * summary(mixed.model)$coef[[2]] + summary(mixed.model)$coefficients[[1]]
+
+means.df <- group_by(muts.per.cell, Code.visit) %>% summarize(my.mean=mean(scale_mut))
+muts.per.cell <- left_join(muts.per.cell, means.df, by="Code.visit")
+ggplot(data=muts.per.cell[order(muts.per.cell$Age),]) +
+	geom_line(aes(x=Age, y=pred_mut), linetype="dashed", show.legend=FALSE, color="black") + 
+	geom_line(aes(x=Age, y=my.mean, group=Code, color=Code), size=1.5) +
+	ylab("Mutations per cell") + xlab("Age") + theme_classic() +
+	ylim(0,65) + 
+	theme(axis.text.x=element_text(size=15), axis.text.y=element_text(size=15),
+		axis.title.x=element_text(size=15), axis.title.y=element_text(size=20))
+write.csv(muts.per.cell[order(muts.per.cell$Age),], 
+	"./data/Figure3A_muts_per_cell.csv")
+write.csv(means.df, "./data/fig2a_means_df.csv")
+print(paste("Slope:", summary(mixed.model)$coef[[2]]))
+ggsave("./figures/Figure3A.png", width=5, height=5)
+
+slopes.df <- group_by(muts.per.cell, Code, visit, Age) %>% 
+  summarize(my.mean=mean(scale_mut)) %>%
+  mutate(visit=ifelse(visit==1, "first", "second")) %>%
+  pivot_wider(names_from=visit, values_from=c(my.mean, Age), id_cols=Code) %>%
+  mutate(slope=(my.mean_second-my.mean_first)/(Age_second-Age_first))
+slopes.df <- rbind(slopes.df, list("Code"="overall", 
+                   "my.mean_first"=NA,
+                   "my.mean_second"=NA,
+                   "Age_first"=NA,
+                   "Age_second"=NA, 
+                   "slope"=summary(mixed.model)$coef[[2]]))
+print(slopes.df)
+write.csv(slopes.df, "./data/fig2a_slopes_df.csv")
+
+new.df <- mutate(means.df, Code=substr(Code.visit,1,2), visit=as.numeric(substr(Code.visit, 4,4)), scaled_muts=my.mean) %>%
+	dplyr::select(-Code.visit, -my.mean) %>%
+	left_join(distinct(meta, Code, visit, Age))
+write.csv(new.df, "./data/2_Figure3A_data.csv")
+
+```
+
+```{r SharedMutations}
+## look for mutations present at 2 visits. Also find the mutations present at only one visit. Ignore F3.3 for now. 
+## For positions found at multiple visits, look up whether the cells they occupy increase or decrease.  
+##
+## version 2: instead of using cell fractions, use the absolute cell number. Normalize by visit total cell #. 
+##
+## R/4.0.5
+
+library(tidyverse)
+library(ggpubr)
+
+## get the cells for each visit.
+meta <- read_csv('../common_data/clustering_metadata_logNorm.csv', guess_max = 100000) %>%
+	mutate(bc=substr(barcode, 1, 16)) %>% 
+	dplyr::select(-barcode) %>%
+	filter(study=="longi") %>%
+	mutate(Code.visit=paste0(Code, ".", visit))
+
+
+code.visit.counts <- distinct(meta, Code, visit, bc) %>%
+	group_by(Code, visit) %>%
+	summarize(cells=n())
+
+all.muts <- read.csv("./data/fig2_longi.csv") %>%
+	filter(Code.visit!="F3.2")
+
+codes <- sort(unique(all.muts$Code))
+
+all.lost.muts <- tibble()
+all.gained.muts <- tibble()
+for (cc in codes) {
+	v1.muts <- filter(all.muts, Code.visit==paste0(cc, ".", 1)) %>%
+			distinct(GENE, AA_CHANGE) %>% 
+			mutate(has_v1=TRUE)
+
+	if (cc!="F3") {
+		v2.muts <- filter(all.muts, Code.visit==paste0(cc, ".", 2)) %>%
+				distinct(GENE, AA_CHANGE) %>% 
+				mutate(has_v2=TRUE)
+	} else {
+		v2.muts <- filter(all.muts, Code.visit==paste0(cc, ".", 3)) %>%
+				distinct(GENE, AA_CHANGE) %>% 
+				mutate(has_v2=TRUE)
+	}
+	## get the positions shared and unique
+	shared <- inner_join(v1.muts, v2.muts, by=c("GENE", "AA_CHANGE")) %>%
+		mutate(is_shared=TRUE) %>%
+		dplyr::select(-has_v1, -has_v2)
+
+	## find number of cells associated with each mutation at each visit
+	v1.cells <- unique(filter(all.muts, Code.visit==paste0(cc, ".", 1))$bc)
+	shared.v1 <- filter(all.muts, Code.visit==paste0(cc, ".", 1)) %>%
+		left_join(shared, by=c("GENE", "AA_CHANGE")) %>%
+		filter(is.na(is_shared)==F) %>%
+		distinct(GENE, AA_CHANGE, bc) %>%
+		group_by(GENE, AA_CHANGE) %>%
+		summarize(mut_cells=n())
+	shared.v1 <- mutate(shared.v1, mut_frac=mut_cells/filter(code.visit.counts, Code==cc & visit==1)$cells)
+
+	if (cc!="F3") {
+		v2.cells <- unique(filter(all.muts, Code.visit==paste0(cc, ".", 2))$bc)
+		shared.v2 <- filter(all.muts, Code.visit==paste0(cc, ".", 2)) %>%
+			left_join(shared, by=c("GENE", "AA_CHANGE")) %>%
+			filter(is.na(is_shared)==F) %>%
+			distinct(GENE, AA_CHANGE, bc) %>%
+			group_by(GENE, AA_CHANGE) %>%
+			summarize(mut_cells=n())
+		shared.v2 <- mutate(shared.v2, mut_frac=mut_cells/filter(code.visit.counts, Code==cc & visit==2)$cells)
+	} else {
+		v2.cells <- unique(filter(all.muts, Code.visit==paste0(cc, ".", 3))$bc)
+		shared.v2 <- filter(all.muts, Code.visit==paste0(cc, ".", 3)) %>%
+			left_join(shared, by=c("GENE", "AA_CHANGE")) %>%
+			filter(is.na(is_shared)==F) %>%
+			distinct(GENE, AA_CHANGE, bc) %>%
+			group_by(GENE, AA_CHANGE) %>%
+			summarize(mut_cells=n())
+		shared.v2 <- mutate(shared.v2, mut_frac=mut_cells/filter(code.visit.counts, Code==cc & visit==3)$cells)
+	}
+
+	### compare the visit 1 cells mutation cell fractions to those for visit 2
+	shared.compare <- distinct(shared.v1, GENE, AA_CHANGE, mut_frac) %>%
+		mutate(mut_frac_v1=mut_frac) %>%
+		dplyr::select(-mut_frac) %>%
+		left_join(distinct(shared.v2, GENE, AA_CHANGE, mut_frac), by=c("GENE", "AA_CHANGE")) %>%
+		mutate(mut_frac_v2=mut_frac) %>%
+		dplyr::select(-mut_frac)
+
+	## save mutations that go down
+	lost.muts <- mutate(shared.compare, frac_loss=mut_frac_v1-mut_frac_v2) %>%
+		filter(frac_loss>0)
+	lost.muts <- lost.muts[order(lost.muts$frac_loss, decreasing=TRUE),]
+	lost.muts$Code <- cc
+	all.lost.muts <- rbind(all.lost.muts, lost.muts)
+
+	## save mutations that go up
+	gained.muts <- mutate(shared.compare, frac_gained=mut_frac_v2-mut_frac_v1) %>%
+		filter(frac_gained>0)
+	gained.muts <- gained.muts[order(gained.muts$frac_gained),]
+	gained.muts$Code <- cc
+	all.gained.muts <- rbind(all.gained.muts, gained.muts)
+}
+
+write.csv(all.lost.muts, "./data/3.1v2_lost_mutations.csv")
+write.csv(all.gained.muts, "./data/3.1v2_gained_mutations.csv")
+
+```
+
+```{r Figure2b}
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+
+## take gained and lost mutations - reformat to prepare for plotting
+all.lost <- read.csv("./data/3.1v2_lost_mutations.csv")
+all.gained <- read.csv("./data/3.1v2_gained_mutations.csv")
+
+all.compare <- rbind(dplyr::select(all.lost, GENE, AA_CHANGE, mut_frac_v1, mut_frac_v2, Code),
+	dplyr::select(all.gained, GENE, AA_CHANGE, mut_frac_v1, mut_frac_v2, Code)) %>%
+	mutate(mutation=paste(GENE, AA_CHANGE)) %>%
+	dplyr::select(-GENE, -AA_CHANGE)
+
+plotting.df <- data.frame(mutation=c(all.compare$mutation, all.compare$mutation),
+	visit=c(rep(1, nrow(all.compare)), rep(2, nrow(all.compare))),
+	cell_fraction=c(all.compare$mut_frac_v1, all.compare$mut_frac_v2),
+	Code=c(all.compare$Code, all.compare$Code))
+
+plotting.df[(plotting.df$Code=="F3")&(plotting.df$visit==2), "visit"] <- 3
+
+## join the cell fractions with the ages for each visit
+meta <- read_csv('./../common_data/clustering_metadata_logNorm.csv', guess_max = 100000)
+
+meta <- meta %>%
+  	filter(study=="longi") %>%
+	distinct(Code, visit, Age)
+
+plotting.df <- left_join(plotting.df, meta) %>%
+	dplyr::select(-mutation)
+mixed.model <- lmer(cell_fraction ~ Age + (1|Code), data=plotting.df)
+mixed.model.an <- anova(mixed.model)
+mixed.model.an$slope <- summary(mixed.model)$coef[[2]]
+write.csv(mixed.model.an, "./data/fig2b_anova.csv")
+
+avg.df <- group_by(plotting.df, Code, visit, Age) %>%
+	summarize(avg_cell_fraction=mean(cell_fraction)) %>%
+	mutate(Age=as.numeric(Age))
+
+avg.df$pred_frac <- avg.df$Age * summary(mixed.model)$coef[[2]] + summary(mixed.model)$coefficients[[1]]
+print(avg.df)
+
+write.csv(avg.df, "./data/avg.df.csv")
+
+ggplot(data=avg.df) +
+	geom_line(aes(x=Age, y=100*pred_frac), linetype="dashed", show.legend=FALSE, color="black") + 
+	geom_line(aes(x=Age, y=100*avg_cell_fraction, group=Code, color=Code), size=1.5) +
+	ylab("% of cells with shared mutation") + xlab("Age") + theme_classic() +
+	xlim(30,80) +
+	theme(axis.text.x=element_text(size=15), axis.text.y=element_text(size=15),
+		axis.title.x=element_text(size=20), axis.title.y=element_text(size=20)) +
+	scale_y_continuous(breaks=seq(0,1,0.2), limits=c(0,1), labels=format(seq(0,1,0.2), nsmall=1))
+
+ggsave("./figures/Figure3B.png", width=5, height=5)
+
+slopes.df <-  mutate(avg.df,visit=ifelse(visit==1, "first", "second")) %>%
+  pivot_wider(names_from=visit, values_from=c(avg_cell_fraction, Age), id_cols=Code) %>%
+  mutate(slope=(avg_cell_fraction_second-avg_cell_fraction_first)/(Age_second-Age_first))
+slopes.df <- rbind(slopes.df,
+      list(Code="overall", visit=NA, Age=NA, avg_cell_fraction_first=NA,
+           avg_cell_fraction_second=NA, Age_first=NA, Age_second=NA, slope=summary(mixed.model)$coef[[2]]))
+write.csv(slopes.df, "./data/fig2b_slopes_df.csv")
+
+```
+
+
+```{r LookupLostGained}
+## Look up whether mutations are being lost or gained between visits.
+library(tidyverse)
+
+all.muts <- read_csv("./data/compiled_9_longi.csv",
+		guess_max=100000)
+all.muts <- mutate(all.muts, Code=substr(donor, 1,2), Person=donor) %>%
+	dplyr::select(Code, Person, bc, Chr, POS, GENE, AA_CHANGE, FUNCTION) %>%
+	filter(is.na(AA_CHANGE)==F) %>%
+	filter(grepl("\\*", AA_CHANGE)==F) %>%
+	filter(grepl("\\?", AA_CHANGE)==F) %>%
+	filter(grepl("ex", AA_CHANGE)==F)
+
+all.muts <- mutate(all.muts, from_aa=substr(AA_CHANGE, 3, 5), 
+	to_aa=substr(AA_CHANGE, nchar(AA_CHANGE)-2, nchar(AA_CHANGE)),
+	aa_pos=as.numeric(substr(AA_CHANGE, 6, nchar(AA_CHANGE)-3)))
+
+## 
+a.list <- c("ala", "arg","asn", "asp","cys","gln","glu","gly","his",
+	"ile","leu","lys","met","phe","pro","ser","thr","trp","tyr","val")
+a.list <- paste0(toupper(substr(a.list,1,1)),substr(a.list,2,3)) # convert to title case
+sym.list <- c("A","R","N", "D", "C", "Q", "E", "G", "H", "I", 
+	"L", "K", "M", "F", "P", "S", "T", "W", "Y", "V")
+
+aa_df <- data.frame(abbrev=a.list, symbol=sym.list)
+
+all.muts <- mutate(all.muts, abbrev=from_aa) %>%
+	left_join(aa_df, by="abbrev") %>%
+	mutate(from_aa=abbrev, from_symbol=symbol) %>%
+	dplyr::select(-symbol) %>%
+	mutate(abbrev=to_aa) %>%
+	left_join(aa_df, by="abbrev") %>%
+	mutate(to_aa=abbrev, to_symbol=symbol) %>%
+	dplyr::select(-abbrev, -symbol) %>%
+	filter(to_symbol!=from_symbol)
+
+##
+lost.muts <- read.csv("./data/3.1v2_lost_mutations.csv")
+print(dim(lost.muts))
+lost.muts <- lost.muts %>%
+	inner_join(all.muts, by=c("Code", "GENE", "AA_CHANGE"))
+print(dim(lost.muts))
+
+lost.mut.freq <- distinct(lost.muts, Code, Chr, POS, FUNCTION, GENE, from_symbol, aa_pos, to_symbol, AA_CHANGE) %>%
+	group_by(GENE, AA_CHANGE, FUNCTION, from_symbol, aa_pos, to_symbol) %>%
+	summarize(donors.losing=n())
+lost.mut.freq <- lost.mut.freq[order(lost.mut.freq$donors.losing, decreasing=TRUE),]
+
+##
+gained.muts <- read.csv("./data/3.1v2_gained_mutations.csv") 
+print(dim(gained.muts))
+gained.muts <- gained.muts %>%
+	inner_join(all.muts, by=c("Code", "GENE", "AA_CHANGE"))
+print(dim(gained.muts))
+
+gained.mut.freq <- distinct(gained.muts, Code, Chr, POS, FUNCTION, GENE, from_symbol, aa_pos, to_symbol, AA_CHANGE) %>%
+	group_by(GENE, AA_CHANGE, FUNCTION, from_symbol, aa_pos, to_symbol) %>%
+	summarize(donors.gaining=n())
+gained.mut.freq <- gained.mut.freq[order(gained.mut.freq$donors.gaining, decreasing=TRUE),]
+
+##
+gained.mut.freq$sym_change <- paste0(gained.mut.freq$from_symbol, gained.mut.freq$aa_pos, gained.mut.freq$to_symbol)
+lost.mut.freq$sym_change <- paste0(lost.mut.freq$from_symbol, lost.mut.freq$aa_pos, lost.mut.freq$to_symbol)
+
+write.csv(gained.mut.freq, "./data/3.3v2_gained_gene_muts.csv")
+write.csv(lost.mut.freq, "./data/3.3v2_lost_gene_muts.csv")
+
+write.csv(gained.muts, "./data/3.3v2_refiltered_gained_muts.csv")
+write.csv(lost.muts, "./data/3.3v2_refiltered_lost_muts.csv")
+
+### replot after the filtering
+library(ggpubr)
+
+for (cc in unique(gained.muts$Code)){
+	shared.compare <- rbind(dplyr::select(filter(gained.muts, Code==cc), Chr, POS, GENE, AA_CHANGE, mut_frac_v1, mut_frac_v2), 
+		dplyr::select(filter(lost.muts, Code==cc), Chr, POS, GENE, AA_CHANGE, mut_frac_v1, mut_frac_v2))
+	
+	plotting.df <- data.frame(mut_name=paste(shared.compare$GENE, shared.compare$AA_CHANGE),
+							visit=c(rep(1, nrow(shared.compare)), rep(2, nrow(shared.compare))),
+							cell_fraction=c(shared.compare$mut_frac_v1, shared.compare$mut_frac_v2))
+
+	compare.out <- compare_means(data=plotting.df, formula=cell_fraction ~ visit, method="t.test", paired=TRUE)
+	ggplot(data=plotting.df, aes(x=visit, y=cell_fraction)) +
+		geom_line(size=1, aes(group=mut_name)) +
+		scale_x_discrete() +
+		theme_classic() +
+		stat_smooth(method="lm", linetype="dashed") +
+		labs(caption=paste("P-value:", signif(compare.out$p, 3)))
+	ggsave(paste0("./figures/3.3.0/", cc, "_cell_fractions.png"))
+}
+
+
+```
+
+
+```{r Fig2cd}
+## Load in the mutations associated with amino acid changes
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+
+gained.muts <- read.csv("./data/3.3v2_refiltered_gained_muts.csv")
+lost.muts <- read.csv("./data/3.3v2_refiltered_lost_muts.csv") 
+
+gained.df <- gained.muts %>%
+  mutate(mutation=paste(GENE, from_symbol, aa_pos, to_symbol)) %>%
+  dplyr::select(-from_symbol, -aa_pos, -to_symbol, -frac_gained)
+lost.df <- lost.muts %>%
+  mutate(mutation=paste(GENE, from_symbol, aa_pos, to_symbol)) %>%
+  dplyr::select(-from_symbol, -aa_pos, -to_symbol, -frac_loss)
+
+sel.muts <- read.csv("manually_chosen_genes_fig2cd.csv") %>%
+  mutate(mutation=paste(GENE, from_symbol, aa_pos, to_symbol)) %>%
+  dplyr::select(-from_symbol, -aa_pos, -to_symbol)
+
+gained.df <- filter(gained.df, mutation%in%sel.muts$mutation)
+lost.df <- filter(lost.df, mutation%in%sel.muts$mutation)
+
+all.shared <- rbind(gained.df, lost.df) 
+write.csv(all.shared, "./data/fig2c_all_shared.csv")
+
+
+meta <- read_csv('./../common_data/clustering_metadata_logNorm.csv', guess_max = 100000) %>%
+  filter(study=="longi") %>%
+	distinct(Code, visit, Age)
+Code_to_color <- read.csv("Code_to_color.csv")
+
+shared.plotting <- data.frame(mutation=c(all.shared$mutation, all.shared$mutation),
+						Code=c(all.shared$Code, all.shared$Code),
+						visit=c(rep(1, nrow(all.shared)), rep(2, nrow(all.shared))),
+						cell_fraction=c(all.shared$mut_frac_v1, all.shared$mut_frac_v2)) 
+
+shared.plotting <- left_join(shared.plotting, meta) %>%
+	mutate(Code.mutation=paste(Code, mutation)) 
+write.csv(shared.plotting, "./data/shared.plotting.csv")
+
+plot_mutation <- function(mutation_df){
+  title.size = 20
+  mutation <- unique(mutation_df$mutation)[[1]]
+  print(mutation)
+  avg.df <- mutation_df %>%
+  	group_by(Code.mutation, visit, Age, Code) %>%
+  	summarize(avg_cell_fraction=mean(cell_fraction)) %>%
+  	mutate(Age=as.numeric(Age))
+  
+  plotting.df <- left_join(mutation_df, meta) %>%
+    dplyr::select(-mutation)
+  mixed.model <- lmer(cell_fraction ~ Age + (1|Code), data=plotting.df)
+  mixed.model.an <- anova(mixed.model)
+  mixed.model.an$slope <- summary(mixed.model)$coef[[2]]
+  write.csv(mixed.model.an, paste0("./data/fig2c_",mutation,"_anova.csv"))
+  avg.df$pred_frac <- avg.df$Age * summary(mixed.model)$coef[[2]] + summary(mixed.model)$coefficients[[1]]
+  
+  sbst_Code_to_color <- Code_to_color %>% filter(Code %in% avg.df$Code) 
+  write.csv(avg.df, paste0("./data/fig2c",mutation,"_avg_df.csv"))
+
+  ggplot(data=avg.df) +
+    geom_line(aes(x=Age, y=100*pred_frac), linetype="dashed", show.legend=FALSE, color="black") + 
+  	geom_line(aes(x=Age, y=100*avg_cell_fraction, group=Code.mutation, color=Code), 
+  	          size=1.5) +
+  	ylab("% of cells with shared mutation") + xlab("Age") + theme_classic() +
+  	xlim(30,80) +
+  	theme(axis.text.x=element_text(size=15), axis.text.y=element_text(size=15),
+  		axis.title.x=element_text(size=title.size), axis.title.y=element_text(size=title.size),
+      legend.position = "top") +
+  	scale_y_continuous(breaks=seq(0,0.25,0.05), limits=c(0,0.25), labels=format(seq(0,0.25,0.05), nsmall=1)) +
+    scale_color_manual(breaks=sbst_Code_to_color$Code,
+                       values=sbst_Code_to_color$color) 
+  ggsave(paste0("./figures/Figure3C_",mutation,"_NPW.png"), width=5, height=5)
+}
+
+for (mut in unique(shared.plotting$mutation)){
+  df <- filter(shared.plotting, mutation==mut)
+  plot_mutation(df)
+}
+
+```
+
+```{r Figure2ef}
+
+## Take the selected mutations from previous steps displayed in Figure 3C. For donors with these mutations,
+## find if transcriptional level of these genes is significantly different between mutated and non-mutated
+## cells. 
+##
+## For cells associated and not associated with each mutation, also get cd8a and cd8b expression. 
+##
+## v1: show subset changes, plot relevant genes by subset
+## v2: before doing genes analysis, subtract from each dataset the mean log2 gene exp. 
+##
+library(Seurat)
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+
+### these sometimes get commented out when the for-loop gets sourced
+fig3cmuts <- read.csv("manually_chosen_genes_fig2ef.csv") %>%
+  mutate(mutation=paste(GENE, from_symbol, aa_pos, to_symbol)) 
+
+filtered.gained <- read.csv("./data/3.3v2_refiltered_gained_muts.csv") %>%
+  mutate(mutation=paste(GENE, from_symbol, aa_pos, to_symbol)) 
+filtered.lost <- read.csv("./data/3.3v2_refiltered_lost_muts.csv") %>%
+  mutate(mutation=paste(GENE, from_symbol, aa_pos, to_symbol))  
+
+all.counts <- readRDS("/data/TCR/10X_Genomics/scRNAseq_P1_HUMAN_GEX_V2/data/tidy/P1_P4_noNormalize/batchCorrected_matrix_clusterFltr_logNorm_log2.Rds")
+all.meta <- read_csv("../common_data/clustering_metadata_logNorm.csv", guess_max=100000) %>%
+  filter(study=="longi") %>%
+  mutate(short_bc=paste0(substr(barcode, 1, 16)))
+phenos <- read.csv("../common_data/pheno_assgnmnt_logNorm.csv")
+all.meta <- left_join(all.meta, dplyr::select(phenos, cluster, pheno), by=c("cluster")) %>%
+  filter(!(pheno %in% c("NK1", "NK2", "NK3")))
+
+all.counts <- all.counts[, all.meta$barcode]
+
+raise2.mean <- function(x) {
+  return(mean(2^x))
+}
+
+cell.avgs <- apply(X=all.counts, FUN=raise2.mean, MARGIN=2) %>% # get average of 2^dat for each cell 
+  log2() # .. then log2, to get cell avg log2 exp. 
+
+all.counts <- t(t(as.matrix(all.counts))-cell.avgs) # subtract the cell-averages from each cell. For matrices, subtraction is row-wise, so the data must be transposed and put back.  
+
+#### mutations by cell for those mutations we keep
+filtered.gained <- filter(filtered.gained, mutation%in%fig3cmuts$mutation) %>% dplyr::select(-frac_gained)
+filtered.lost <- filter(filtered.lost, mutation%in%fig3cmuts$mutation) %>% dplyr::select(-frac_loss)
+
+all.filtered <- rbind(filtered.gained, filtered.lost)
+Code_to_color <- read.csv("./Code_to_color.csv")
+
+print(dim(all.filtered))
+save.mut.dat <- tibble()
+for (row.idx in 1:nrow(fig3cmuts)) {
+  my.row <- fig3cmuts[row.idx,]
+  mut.cells <- filter(all.filtered, mutation==my.row$mutation)
+  print(my.row$mutation)
+  print("dim(mut.cells)")
+  print(dim(mut.cells))
+  if(nrow(mut.cells)==0){
+    print(paste("SKIPPING", my.row$mutation))
+    next
+  }
+  
+  new.bc.df <- data.frame(short_bc=mut.cells$bc, Code=mut.cells$Code) %>% # get the cell-barcode suffixes
+    inner_join(dplyr::select(all.meta, short_bc, Code, barcode))
+  codes <- unique(new.bc.df$Code)
+  
+  non.mut.cells <- filter(all.meta, (Code%in%codes) & ((barcode%in%new.bc.df$barcode)==F))$barcode # which cells are from donors with mutations, but not mutated?
+  
+  mut.subsets <- all.meta[all.meta$barcode %in% new.bc.df$barcode, ] %>% # convert naive from NA to N
+    mutate(pheno=ifelse(is.na(pheno), "N", pheno))
+  non.mut.subsets <- all.meta[all.meta$barcode %in% non.mut.cells, ] %>% 
+    mutate(pheno=ifelse(is.na(pheno), "N", pheno))
+  
+  mut.subsets[mut.subsets$pheno %in% c("EM1", "EM2", "EM3"),]$pheno <- "EM"
+  mut.subsets[mut.subsets$pheno %in% c("RA1", "RA2"),]$pheno <- "RA"
+  mut.subsets[mut.subsets$pheno %in% c("NK1", "NK2", "NK3"),]$pheno <- "NK"
+  non.mut.subsets[non.mut.subsets$pheno %in% c("EM1", "EM2", "EM3"),]$pheno <- "EM"
+  non.mut.subsets[non.mut.subsets$pheno %in% c("RA1", "RA2"),]$pheno <- "RA"
+  
+  mut.combine <- data.frame(barcode=new.bc.df$barcode,exp=all.counts[my.row$GENE, new.bc.df$barcode]) %>%
+    left_join(mut.subsets, by="barcode") %>% filter(exp>0)
+  non.mut.combine <- data.frame(barcode=non.mut.cells, exp=all.counts[my.row$GENE, non.mut.cells]) %>%
+    left_join(non.mut.subsets, by="barcode") %>% filter(exp>0)
+  
+  write.csv(mut.combine, paste0("./data/fig2e_mut_combine", my.row$mutation, ".csv"))
+  write.csv(non.mut.combine, paste0("./data/fig2e_non_mut_combine", my.row$mutation, ".csv"))
+  
+  mut.avg.df <- group_by(mut.combine, Code, visit, pheno) %>%
+    summarise(avg_exp=mean(exp), num_cells=n())%>%
+    mutate(cell="mutated")
+  non.mut.avg.df <- group_by(non.mut.combine, Code, visit, pheno)%>%
+    summarise(avg_exp=mean(exp), num_cells=n())%>%
+    mutate(cell="not mutated")
+  avg.df <- rbind(mut.avg.df, non.mut.avg.df) %>% 
+    filter(!(Code=="F3" & visit==2))
+  write.csv(avg.df, paste("./data/fig2e_avg_df", my.row$mutation, ".csv"))
+  
+  avg.avg.df <- group_by(avg.df, Code, cell) %>%
+    summarise(avg_avg_exp=mean(avg_exp), num_cells=sum(num_cells))
+  write.csv(avg.avg.df, paste("./data/fig2e_avg_avg_df", my.row$mutation, ".csv"))
+  
+  plotting.df <- avg.avg.df%>%
+    replace_na(list(avg_avg_exp=0,
+                    num_cells=0)) 
+  mixed.model <- lmer(avg_avg_exp ~ cell + (1|Code), data=plotting.df)
+  mixed.model.an <- anova(mixed.model)
+  mixed.model.an$slope <- summary(mixed.model)$coef[[2]]
+  write.csv(mixed.model.an, paste0("./data/fig2e_", my.row$mutation,"_anova.csv"))
+  plotting.df$dotted_line <- ifelse(plotting.df$cell=="mutated", 0, 1) * summary(mixed.model)$coef[[2]] + summary(mixed.model)$coefficients[[1]]
+  
+  test.df <- pivot_wider(plotting.df, names_from="cell", values_from="avg_avg_exp",
+                         id_cols=Code)
+  t_test <- t.test(test.df$mutated, test.df$`not mutated`, paired=TRUE)
+
+  sbst_Code_to_color <- Code_to_color %>% filter(Code %in% avg.avg.df$Code) 
+  title.size = 15
+  ggplot(plotting.df, 
+         aes(x=cell, y=avg_avg_exp, group=Code, color=Code)) +
+    geom_line() +
+    geom_line(aes(x=cell, y=dotted_line), linetype="dashed", show.legend=FALSE, color="black") + 
+    ggtitle(paste(my.row$mutation, "p-value", t_test$p.value))+
+    scale_color_manual(breaks=sbst_Code_to_color$Code,
+                       values=sbst_Code_to_color$color) +
+    theme(axis.text.x=element_text(size=15), axis.text.y=element_text(size=15),
+          axis.title.x=element_text(size=title.size), axis.title.y=element_text(size=title.size),
+          legend.position = "top") +
+    theme_classic()
+  ggsave(paste("./figures/fig2e", my.row$mutation, ".png"), width=5, height=5)
+}
+
+
+```
+

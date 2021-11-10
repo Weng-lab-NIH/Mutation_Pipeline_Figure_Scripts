@@ -1,0 +1,55 @@
+---
+title: "Figure 1 Notebook"
+author: "Humza Hemani"
+output: figure1
+---
+
+```{r Figure1E/F}
+library(tidyverse)
+library(argparse)
+
+donor_df <- read.csv("donors.csv")
+
+pipeline_dir <- donor_df[1,4]
+library_name <- donor_df[1, 1]
+step9_path <- file.path(pipeline_dir, "step9", "filtered_ScoredMutations.csv")
+print(step9_path)
+tot.df <- read.csv(step9_path, header=T)
+tot.df$library_name <- library_name
+
+for (i in 2:nrow(donor_df)) {
+  pipeline_dir <- donor_df[i,4]
+  library_name <- donor_df[i, 1]
+  step9_path <- file.path(pipeline_dir, "step9", "filtered_ScoredMutations.csv")
+  print(step9_path)
+  step9_csv <- read.csv(step9_path, header=T)
+  step9_csv$library_name <- library_name
+  tot.df <- rbind(tot.df, step9_csv)
+}
+
+tot.df <- tot.df %>%
+  mutate(Code=substr(library_name, 1, 2), bc=substr(bc, 1,16))
+
+######## load in MD so that batches get separated into visits  
+meta <- read_csv('../common_data/clustering_metadata_logNorm.csv', guess_max = 100000)
+pheno <- read_csv('../common_data/pheno_assgnmnt_logNorm.csv')
+meta <- meta %>% inner_join(pheno, by='cluster')
+print(head(meta))
+
+meta <- filter(meta, study=="longi") %>% 
+  dplyr::select(barcode, Person, Code, visit, Age, subset) %>%
+  mutate(bc=substr(barcode, 1, 16), Code.visit=paste0(Code, ".", visit))
+
+new.tot.df <- left_join(tot.df, dplyr::select(meta, Code, bc, Age, Code.visit, subset), by=c("Code", "bc")) %>%
+  filter(subset != "NK")
+new.tot.df <- filter(new.tot.df, Code.visit!="F3.2")
+
+summ.df <- group_by(new.tot.df, Code.visit) %>%
+  summarize(pass.mutect=sum(is.na(mutect_filter)==F), 
+            pass.umi=sum((is.na(umi_fraction_filter)==F)&(is.na(mutect_filter)==F)&(is.na(num_variant_filter)==F)))
+write.csv(summ.df, "fig1e_summarized_muts.csv")
+
+summ.doubles <- group_by(new.tot.df, Code.visit) %>%
+    summarize(num.doubles=sum(recovered_double==T))
+write.csv(summ.doubles, "fig1f_summarized_doubles.csv")
+```

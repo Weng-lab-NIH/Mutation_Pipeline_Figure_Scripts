@@ -1,0 +1,179 @@
+---
+title: "Table 1"
+author: "Humza Hemani"
+output: table1
+---
+
+```{r Preprocess}
+
+library(tidyverse)
+library(argparse)
+
+preprocess_longi <- function(donor_csv, outpath_9, outpath_10) {
+  donor_df <- read.csv(donor_csv)
+
+  pipeline_dir <- donor_df[1,4]
+  sample_name <- donor_df[1, 1]
+
+  step9_path <- file.path(pipeline_dir, "step9", "filtered_ScoredMutations.csv")
+  tot.df <- read.csv(step9_path, header=T)
+  tot.df$donor <- sample_name
+
+  step10_path <- file.path(pipeline_dir, "step10", "summary.csv")
+  tot.df.10 <- read.csv(step10_path, header=F)
+
+  for (i in 2:nrow(donor_df)) {
+    pipeline_dir <- donor_df[i,4]
+    sample_name <- donor_df[i, 1]
+    print(sample_name)
+    step9_path <- file.path(pipeline_dir, "step9", "filtered_ScoredMutations.csv")
+    print(step9_path)
+    step9_csv <- read.csv(step9_path, header=T)
+    step9_csv$donor <- sample_name
+    tot.df <- rbind(tot.df, step9_csv)
+
+    step10_path <- file.path(pipeline_dir, "step10", "summary.csv")
+    print(step10_path)
+    step10_csv <- read.csv(step10_path, header=F)
+    tot.df.10 <- rbind(tot.df.10, step10_csv)
+
+  }
+
+  tot.df <- tot.df %>%
+    mutate(Code=substr(donor, 1, 2), bc=substr(bc, 1, 16))
+
+  ######## load in MD so that batches get separated into visits  
+  meta <- read_csv('../common_data/clustering_metadata_logNorm.csv', guess_max = 100000)
+  pheno <- read_csv('../common_data/pheno_assgnmnt_logNorm.csv')
+  meta <- meta %>% inner_join(pheno, by='cluster')
+
+  meta <- filter(meta, study=="longi") %>% 
+    dplyr::select(barcode, Person, Code, visit, Age, subset) %>%
+    mutate(bc=substr(barcode, 1, 16), Code.visit=paste0(Code, ".", visit))
+
+  new.tot.df <- left_join(tot.df, dplyr::select(meta, Code, bc, Code.visit, Person, subset), 
+                          by=c("Code", "bc")) %>%
+    filter(subset!="NK")
+  write.csv(new.tot.df, outpath_9)
+
+
+  colnames(tot.df.10) <- c("donor", "exome_reads", "sam_reads", "exome_cov", 
+    "cov", "umi")
+  tot.df.10 <- distinct(tot.df.10, donor, .keep_all = TRUE)
+  write.csv(tot.df.10, outpath_10, row.names=F)
+}
+
+preprocess_longi("./longi_donors.csv", 
+  "compiled_9_longi.csv", 
+  "compiled_10_longi.csv")
+
+
+
+```
+
+```{r Table1}
+
+#!/usr/bin/env Rscript
+## Load in data to get info related to each person and their mutations
+## 		Get mutations per visit, mutations with amino acid changes, the total cells per visit, and
+## 		some metadata associated with each donor/visit.
+## 
+##		Note: NK cells are removed before counting cells. 
+##
+
+library(tidyverse)
+
+### get mutations assoc with AA_changes
+all.muts <- read_csv("./compiled_9_longi.csv",
+		guess_max=100000)
+all.muts <- mutate(all.muts, Code=substr(donor, 1,2), Person=donor) %>%
+	dplyr::select(Code, Person, bc, GENE, AA_CHANGE, FUNCTION) %>%
+	filter(is.na(AA_CHANGE)==F) %>%
+	filter(grepl("\\?", AA_CHANGE)==F) %>%
+	filter(grepl("ex", AA_CHANGE)==F)
+
+all.muts <- mutate(all.muts, from_aa=str_extract(AA_CHANGE, regex("[A-Za-z]+[0-9]{1}")), 
+                   to_aa=str_extract(AA_CHANGE, regex("[0-9]{1}[A-Za-z\\*]+")),
+                   aa_pos=str_extract(AA_CHANGE, regex("[0-9]+"))) 
+all.muts <- all.muts %>%
+          mutate(from_aa=tolower(substr(from_aa, 1, nchar(from_aa)-1)),
+                 to_aa=tolower(substr(to_aa, 2, nchar(to_aa))))
+  
+
+## change how mutations are written
+a.list <- c("*", "ala", "arg","asn", "asp","cys","gln","glu","gly","his",
+	"ile","leu","lys","met","phe","pro","ser","thr","trp","tyr","val")
+#a.list <- paste0(toupper(substr(a.list,1,1)),substr(a.list,2,3)) # convert to title case
+sym.list <- c("STOP", "A","R","N", "D", "C", "Q", "E", "G", "H", "I", 
+	"L", "K", "M", "F", "P", "S", "T", "W", "Y", "V")
+
+aa_df <- data.frame(abbrev=a.list, symbol=sym.list)
+
+all.muts <- mutate(all.muts, abbrev=from_aa) %>%
+	left_join(aa_df, by="abbrev") %>%
+	mutate(from_aa=abbrev, from_symbol=symbol) %>%
+	dplyr::select(-symbol) %>%
+	mutate(abbrev=to_aa) %>%
+	left_join(aa_df, by="abbrev") %>%
+	mutate(to_aa=abbrev, to_symbol=symbol) %>%
+	dplyr::select(-abbrev, -symbol)
+
+#### load in the filtered mutations
+meta <- read_csv('../common_data/clustering_metadata_logNorm.csv', guess_max = 100000) %>%
+	mutate(bc=paste0(substr(barcode, 1, 16))) %>% 
+	dplyr::select(-barcode) %>%
+	filter(study=="longi") %>%
+	mutate(Code.visit=paste0(Code, ".", visit))
+
+longi.muts <- read.csv("compiled_9_longi.csv") %>%
+	filter(Code.visit!="F3.2") #%>% mutate(bc=paste0(bc, "-1"))
+print(head(all.muts$bc))
+print(head(longi.muts$bc))
+print("----")
+
+new.longi.muts <- left_join(longi.muts, dplyr::select(all.muts, Person, bc, GENE, AA_CHANGE,
+                                                      from_symbol, to_symbol), 
+	by=c("Person", "bc", "GENE", "AA_CHANGE"))
+print(head(new.longi.muts))
+
+new.longi.muts <- left_join(new.longi.muts, dplyr::select(meta, bc, Person, visit), by=c("Person", "bc"))
+
+subset.new.longi.muts <- filter(new.longi.muts, 
+	!is.na(from_symbol)&!is.na(to_symbol))
+
+long.summ <- group_by(new.longi.muts, Code, visit) %>%
+	summarize(aa_muts=sum(is.na(AA_CHANGE)==F), 
+	          muts=n(), 
+	          missense=sum(replace_na(from_symbol!=to_symbol, 0)), 
+	          nonsense=sum(replace_na(to_symbol=="STOP", 0)),
+	          silent=sum(replace_na(from_symbol==to_symbol,0))
+	          ) %>%
+	mutate(aa_mut_frac=aa_muts/muts) %>%
+	left_join(distinct(meta, Code, visit, Age)) %>%
+	mutate(gender=ifelse(grepl("F", Code), "F", "M"))
+
+## get cells per donor
+clustering.md <- read_csv("../common_data/clustering_metadata_logNorm.csv",
+		guess_max=100000)
+phenos <- read.csv("../common_data/pheno_assgnmnt_logNorm.csv")
+
+clustering.md <- left_join(clustering.md, dplyr::select(phenos, cluster, pheno), by=c("cluster")) %>%
+	mutate(bc=paste0(substr(barcode, 1, 16))) %>%
+	filter((nchar(Person)==4)&(grepl("NK", pheno)==F)) %>% # we don't want to count NK cells
+	mutate(Code=substr(Person, 1, 2)) %>%
+	mutate(Code.visit=paste0(Code, ".", visit)) %>%
+	mutate(c.v.cell=paste0(Code.visit, ".", bc))
+
+longi.muts <- mutate(longi.muts, c.v.cell=paste0(Code.visit, ".", bc))
+
+summ.cells <- dplyr::select(clustering.md, Code, visit, c.v.cell) %>%
+	group_by(Code, visit) %>%
+	summarize(cells=n(), mutated.cells=sum(c.v.cell%in%longi.muts$c.v.cell))
+
+long.summ <- left_join(long.summ, summ.cells)
+
+write.csv(long.summ, "Tbl_1_cound_nonsenseMissense.csv")
+
+
+```
+

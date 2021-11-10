@@ -1,0 +1,3 @@
+GENE,AA_CHANGE,FUNCTION,from_symbol,aa_pos,to_symbol,donors.gaining,sym_change
+TOB1,p.Glu33Lys,protein_coding,E,33,K,4,E33K
+TOB1,p.Gly76Val,protein_coding,G,76,V,5,G76V

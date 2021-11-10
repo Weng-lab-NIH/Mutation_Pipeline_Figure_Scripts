@@ -1,0 +1,17 @@
+sample_name,sex,age,pipeline_dir
+F1_1,F,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/F1_1
+F1_2,F,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/F1_2
+F2_1,F,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/F2_1
+F2_2,F,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/F2_2
+F3_1,F,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/F3_1
+F3_3,F,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/F3_3
+F4_1,F,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/F4_1
+F4_2,F,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/F4_2
+M1_1,M,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/M1_1
+M1_2,M,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/M1_2
+M2_1,M,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/M2_1
+M2_2,M,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/M2_2
+M3_1,M,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/M3_1
+M3_2,M,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/M3_2
+M4_1,M,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/M4_1
+M4_2,M,1,/data/TCR/hemanihh/git_repos/USCMD/real_longi_split_2021_09_23b/M4_2

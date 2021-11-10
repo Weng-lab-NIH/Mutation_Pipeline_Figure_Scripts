@@ -1,0 +1,14 @@
+cluster,pheno,color,subset,cell
+6,CB,green,N,CD8
+1,N,forestgreen,N,CD8
+5,SCM,deepskyblue,CM,CD8
+3,CM,dodgerblue3,CM,CD8
+2,EM1,gold2,EM,CD8
+14,EM2,coral2,EM,CD8
+8,EM3,orange,EM,CD8
+0,RA1,deeppink2,RA,CD8
+7,RA2,darkorchid3,RA,CD8
+13,EFF,red3,EFF,CD8
+4,NK1,orangered,NK,NK
+9,NK2,pink,NK,NK
+18,NK3,brown,NK,NK
