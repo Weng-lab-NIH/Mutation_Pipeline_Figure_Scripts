@@ -676,11 +676,6 @@ for (row.idx in 1:nrow(fig3cmuts)) {
   plotting.df <- avg.avg.df%>%
     replace_na(list(avg_avg_exp=0,
                     num_cells=0)) 
-  mixed.model <- lmer(avg_avg_exp ~ cell + (1|Code), data=plotting.df)
-  mixed.model.an <- anova(mixed.model)
-  mixed.model.an$slope <- summary(mixed.model)$coef[[2]]
-  write.csv(mixed.model.an, paste0("./data/fig2e_", my.row$mutation,"_anova.csv"))
-  plotting.df$dotted_line <- ifelse(plotting.df$cell=="mutated", 0, 1) * summary(mixed.model)$coef[[2]] + summary(mixed.model)$coefficients[[1]]
   
   test.df <- pivot_wider(plotting.df, names_from="cell", values_from="avg_avg_exp",
                          id_cols=Code)
@@ -691,7 +686,6 @@ for (row.idx in 1:nrow(fig3cmuts)) {
   ggplot(plotting.df, 
          aes(x=cell, y=avg_avg_exp, group=Code, color=Code)) +
     geom_line() +
-    geom_line(aes(x=cell, y=dotted_line), linetype="dashed", show.legend=FALSE, color="black") + 
     ggtitle(paste(my.row$mutation, "p-value", t_test$p.value))+
     scale_color_manual(breaks=sbst_Code_to_color$Code,
                        values=sbst_Code_to_color$color) +
